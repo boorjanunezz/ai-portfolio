@@ -72,8 +72,8 @@ if (!useReal) {
   await test("\"¿Qué es Docker?\" recupera skills (el rechazo lo decide el modelo)", () => {
     assert.equal(topFile("¿Qué es Docker?"), "skills.md");
   });
-  await test("el contexto está acotado (≤ 4 chunks)", () => {
-    assert.ok(retrieve("Azure Python proyectos certificaciones máster SQL Docker").length <= 4);
+  await test("el contexto está acotado (≤ 10 chunks)", () => {
+    assert.ok(retrieve("Azure Python proyectos certificaciones máster SQL Docker").length <= 10);
   });
 }
 

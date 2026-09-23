@@ -17,6 +17,9 @@ const API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 const ATTEMPT_TIMEOUT_MS = 25_000; // por modelo
 const TOTAL_BUDGET_MS = 52_000; // < maxDuration (60 s) de app/api/chat/route.ts
 const MIN_ATTEMPT_MS = 4_000; // no merece la pena empezar un intento con menos margen
+const RETRY_DELAY_MS = 1_000;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export interface ModelAnswer {
   status: AnswerStatus;
@@ -68,8 +71,12 @@ export async function generateAnswer(systemPrompt: string, userPrompt: string): 
   const { apiKey, models } = getConfig();
   const deadline = Date.now() + TOTAL_BUDGET_MS;
   let lastError: GeminiError | null = null;
+  // Un 503 ("high demand") suele ser momentáneo: cada modelo saturado se reintenta una vez al final.
+  const queue = models.map((model) => ({ model, retry: false }));
 
-  for (const model of models) {
+  while (queue.length) {
+    const { model, retry } = queue.shift()!;
+    if (retry) await sleep(RETRY_DELAY_MS);
     const remaining = deadline - Date.now();
     if (remaining < MIN_ATTEMPT_MS) break;
     try {
@@ -78,6 +85,7 @@ export async function generateAnswer(systemPrompt: string, userPrompt: string): 
       if (!(err instanceof GeminiError) || !err.retryable) throw err;
       console.warn(`[gemini] ${model} falló (${err.message}); probando el siguiente modelo`);
       lastError = err;
+      if (err.httpStatus === 503 && !retry) queue.push({ model, retry: true });
     }
   }
   throw lastError ?? new GeminiError("El modelo tardó demasiado en responder.", 504);
@@ -143,18 +151,26 @@ function parseResponse(data: GenerateContentResponse): ModelAnswer {
     );
   }
 
+  // Formato inesperado → retryable: otro modelo puede responder bien.
   let parsed: unknown;
   try {
-    parsed = JSON.parse(text);
+    parsed = JSON.parse(extractJson(text));
   } catch {
     console.error("[gemini] JSON inválido:", text.slice(0, 300));
-    throw new GeminiError("El modelo devolvió una respuesta con formato inesperado.", 502);
+    throw new GeminiError("El modelo devolvió una respuesta con formato inesperado.", 502, true);
   }
   if (!isModelAnswer(parsed)) {
     console.error("[gemini] Esquema inesperado:", text.slice(0, 300));
-    throw new GeminiError("El modelo devolvió una respuesta con formato inesperado.", 502);
+    throw new GeminiError("El modelo devolvió una respuesta con formato inesperado.", 502, true);
   }
   return parsed;
+}
+
+/** Algunos modelos (Gemma) envuelven el JSON en ```json ... ``` pese al responseMimeType. */
+function extractJson(text: string): string {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  return start >= 0 && end > start ? text.slice(start, end + 1) : text;
 }
 
 function isModelAnswer(value: unknown): value is ModelAnswer {

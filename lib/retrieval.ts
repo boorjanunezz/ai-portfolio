@@ -13,9 +13,9 @@ import { loadChunks, type Chunk } from "./documents";
  *    mejores que superan un umbral relativo, con un límite de tamaño total.
  */
 
-const TOP_K = 4;
+const TOP_K = 10; // suficiente para listar todos los proyectos o certificaciones
 const RELATIVE_THRESHOLD = 0.3; // descarta chunks con < 30 % de la puntuación del mejor
-const MAX_CONTEXT_CHARS = 4000;
+const MAX_CONTEXT_CHARS = 6000;
 const HISTORY_WEIGHT = 0.5; // peso de la pregunta anterior (para preguntas de seguimiento)
 const BM25_K1 = 1.2;
 const BM25_B = 0.75;
@@ -23,7 +23,7 @@ const BM25_B = 0.75;
 /** Palabras que orientan hacia un archivo aunque no aparezcan en su texto. */
 const FILE_HINTS: Record<string, string> = {
   "about.md":
-    "perfil profile presentacion about experiencia experience trabaja trabajo work job empresa company puesto role contacto contact email correo linkedin ubicacion vive location idiomas",
+    "perfil profile presentacion about experiencia experience trabaja trabajo work job empresa company puesto role contacto contact email correo linkedin ubicacion vive live lives location ciudad city idiomas idioma habla speak spoken languages ingles english espanol spanish",
   "education.md":
     "estudia estudios estudio study studies formacion education grado degree master universidad university carrera titulacion curso",
   "certifications.md":

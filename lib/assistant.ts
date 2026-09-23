@@ -2,7 +2,7 @@ import "server-only";
 import { retrieve } from "./retrieval";
 import { buildUserPrompt, PROMPT_CANARY, REFUSAL, sanitizeUserText, SYSTEM_PROMPT } from "./prompts";
 import { generateAnswer } from "./gemini";
-import type { ChatResponse, ChatTurn } from "./types";
+import type { AnswerStatus, ChatResponse, ChatTurn } from "./types";
 
 /**
  * Orquesta el RAG: pregunta → retrieval → prompt → Gemini → respuesta con fuentes.
@@ -23,8 +23,9 @@ export async function answerQuestion(message: string, history: ChatTurn[]): Prom
   if (result.answer.includes(PROMPT_CANARY)) {
     return { answer: pickLanguage(question).offTopic, sources: [], status: "off_topic" };
   }
-  if (result.status !== "answered") {
-    return { answer: result.answer.trim(), sources: [], status: result.status };
+  const status = normalizeStatus(result.status, result.answer);
+  if (status !== "answered") {
+    return { answer: result.answer.trim(), sources: [], status };
   }
 
   // Las fuentes se limitan a chunks realmente enviados; el modelo no puede inventarlas.
@@ -37,6 +38,18 @@ export async function answerQuestion(message: string, history: ChatTurn[]): Prom
     sources: [...new Set(files)].map((file) => ({ file })),
     status: "answered",
   };
+}
+
+/**
+ * A veces el modelo marca "answered" pero responde con la frase de rechazo:
+ * se corrige el estado para no mostrar fuentes en una respuesta vacía.
+ */
+function normalizeStatus(status: AnswerStatus, answer: string): AnswerStatus {
+  if (status !== "answered") return status;
+  const text = answer.trim();
+  if (text === REFUSAL.es.noInfo || text === REFUSAL.en.noInfo) return "no_info";
+  if (text === REFUSAL.es.offTopic || text === REFUSAL.en.offTopic) return "off_topic";
+  return status;
 }
 
 /** Heurística simple para elegir idioma de los mensajes fijos. */

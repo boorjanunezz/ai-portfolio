@@ -20,10 +20,12 @@ export function Projects({ projects, index }: { projects: Project[]; index: numb
                   <p className="mt-6 font-mono text-[0.8125rem] text-ink-soft">
                     {p.technologies.length ? p.technologies.join("  /  ") : <Pending>tecnologías</Pending>}
                   </p>
-                  <p className="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-sm">
-                    {p.github ? <ExternalLink href={p.github}>GitHub</ExternalLink> : <Pending>GitHub</Pending>}
-                    {p.demo ? <ExternalLink href={p.demo}>Demo</ExternalLink> : <Pending>Demo</Pending>}
-                  </p>
+                  {(p.github || p.demo) && (
+                    <p className="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-sm">
+                      <ProjectLink href={p.github} label="GitHub" />
+                      <ProjectLink href={p.demo} label="Demo" />
+                    </p>
+                  )}
                 </div>
                 {p.image && (
                   <img
@@ -42,4 +44,10 @@ export function Projects({ projects, index }: { projects: Project[]; index: numb
       )}
     </SectionShell>
   );
+}
+
+/** "pending" = PLACEHOLDER en el Markdown; vacío = no se muestra. */
+function ProjectLink({ href, label }: { href?: string; label: string }) {
+  if (!href) return null;
+  return href === "pending" ? <Pending>{label}</Pending> : <ExternalLink href={href}>{label}</ExternalLink>;
 }

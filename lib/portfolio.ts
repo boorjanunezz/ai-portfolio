@@ -31,7 +31,7 @@ export interface Project {
   placeholder: boolean;
   description: TextBlock[];
   technologies: string[];
-  github?: string;
+  github?: string; // URL, "pending" (PLACEHOLDER) o ausente
   demo?: string;
   image?: string;
 }
@@ -53,8 +53,12 @@ function readFile(file: string): string {
   return stripComments(loadMarkdownFiles().find((f) => f.file === file)?.content ?? "");
 }
 
-/** Divide un Markdown en secciones "##" con campos "Clave: valor", listas y párrafos. */
-function parseSections(markdown: string): Section[] {
+/**
+ * Divide un Markdown en secciones "##" con campos "Clave: valor", listas y párrafos.
+ * Solo cuentan como campo las claves de `fieldKeys`: así "TFM: ..." o "Español: nativo."
+ * siguen siendo texto normal.
+ */
+function parseSections(markdown: string, fieldKeys: readonly string[] = []): Section[] {
   const sections: Section[] = [];
   let current: Section | null = null;
   let paragraph: string[] = [];
@@ -83,7 +87,7 @@ function parseSections(markdown: string): Section[] {
     } else if (item) {
       closeParagraph();
       current.items.push(item[1]!.trim());
-    } else if (field && !isPlaceholder(field[1]!)) {
+    } else if (field && fieldKeys.includes(field[1]!.trim().toLowerCase())) {
       closeParagraph();
       current.fields[field[1]!.trim().toLowerCase()] = field[2]!.trim();
     } else {
@@ -111,12 +115,21 @@ function safeUrl(raw: string | undefined): string | undefined {
   return v && /^(https?:\/\/|mailto:)/i.test(v) ? v : undefined;
 }
 
+/** Enlace de proyecto: URL real, "pending" si es PLACEHOLDER, o undefined si está vacío (no se muestra). */
+function link(raw: string | undefined): string | undefined {
+  if (raw && isPlaceholder(raw)) return "pending";
+  return safeUrl(raw);
+}
+
+const CONTACT_KEYS = ["email", "linkedin", "github", "web", "twitter", "x", "teléfono", "telefono"];
+const PROJECT_KEYS = ["tecnologías", "tecnologias", "github", "demo", "imagen"];
+
 function blocks(paragraphs: string[]): TextBlock[] {
   return paragraphs.map((text) => ({ text: text.replace(/^PLACEHOLDER:\s*/i, ""), placeholder: isPlaceholder(text) }));
 }
 
 export function getAbout() {
-  const sections = parseSections(readFile("about.md"));
+  const sections = parseSections(readFile("about.md"), CONTACT_KEYS);
   const profile = sections.find((s) => s.title.toLowerCase() === "perfil");
   const intro = profile?.paragraphs.find((p) => !isPlaceholder(p)) ?? "";
   const details = sections
@@ -126,7 +139,7 @@ export function getAbout() {
 }
 
 export function getContact(): ContactLink[] {
-  const contact = parseSections(readFile("about.md")).find((s) => s.title.toLowerCase() === "contacto");
+  const contact = parseSections(readFile("about.md"), CONTACT_KEYS).find((s) => s.title.toLowerCase() === "contacto");
   return Object.entries(contact?.fields ?? {}).map(([key, raw]) => {
     const label = key.charAt(0).toUpperCase() + key.slice(1);
     const v = value(raw);
@@ -136,7 +149,7 @@ export function getContact(): ContactLink[] {
 }
 
 export function getProjects(): Project[] {
-  return parseSections(readFile("projects.md")).map((s) => ({
+  return parseSections(readFile("projects.md"), PROJECT_KEYS).map((s) => ({
     name: s.title.replace(/^PLACEHOLDER:\s*/i, ""),
     placeholder: s.placeholder,
     description: blocks(s.paragraphs),
@@ -144,8 +157,8 @@ export function getProjects(): Project[] {
       .split(",")
       .map((t) => t.trim())
       .filter(Boolean),
-    github: safeUrl(s.fields.github),
-    demo: safeUrl(s.fields.demo),
+    github: link(s.fields.github),
+    demo: link(s.fields.demo),
     image: value(s.fields.imagen)?.startsWith("/") ? s.fields.imagen : undefined,
   }));
 }
@@ -161,7 +174,7 @@ export function getSkills(): SkillGroup[] {
 }
 
 function getEntries(file: string, metaKeys: string[], urlKey?: string): Entry[] {
-  return parseSections(readFile(file)).map((s) => ({
+  return parseSections(readFile(file), urlKey ? [...metaKeys, urlKey] : metaKeys).map((s) => ({
     title: s.title.replace(/^PLACEHOLDER:\s*/i, ""),
     placeholder: s.placeholder,
     meta: metaKeys.map((k) => value(s.fields[k])).filter((v): v is string => Boolean(v)),

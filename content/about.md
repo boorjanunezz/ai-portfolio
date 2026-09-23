@@ -13,23 +13,27 @@
 
 Borja Núñez es AI & Data Engineer.
 
-PLACEHOLDER: dos o tres frases de presentación (qué haces, en qué te especializas, qué te interesa).
+Especializado en IA generativa sobre Azure: agentes con LangGraph, RAG, automatización con n8n y despliegue de modelos con Azure OpenAI y Azure AI Foundry. Cuenta con cinco certificaciones de Microsoft en datos e IA y un Máster en IA y Big Data. También crea contenido divulgativo sobre herramientas de IA.
 
 ## Experiencia
 
-PLACEHOLDER: puesto actual o más reciente — empresa — periodo.
-PLACEHOLDER: responsabilidades y logros principales.
+Trainee — Ricoh España — desde septiembre de 2026.
 
-## Ubicación y disponibilidad
+Becario de IT — Colegio VillaMadrid — 2023. Mantenimiento del hardware del personal, gestión de expedientes de alumnos con software específico y soporte técnico y de atención al público en eventos del centro.
 
-PLACEHOLDER: ciudad / país y si estás abierto a nuevas oportunidades (remoto, híbrido...).
+Otra experiencia: profesor particular de inglés para alumnos de secundaria (2021–2022) y socorrista y mantenimiento de piscinas en Tretten Pool / Bluetietar (veranos de 2022 y 2024).
+
+## Ubicación
+
+Valdemoro, Madrid (España).
 
 ## Idiomas
 
-PLACEHOLDER: idiomas y nivel.
+Español: nativo.
+Inglés: nivel alto (competencia profesional plena), sin certificación oficial.
 
 ## Contacto
 
-Email: PLACEHOLDER
-LinkedIn: PLACEHOLDER
-GitHub: PLACEHOLDER
+Email: nunezsaleguib@gmail.com
+LinkedIn: https://www.linkedin.com/in/boorjanunezz
+GitHub: https://github.com/boorjanunezz
