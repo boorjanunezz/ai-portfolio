@@ -7,7 +7,7 @@ Rechaza preguntas no relacionadas con Borja y dice claramente cuando algo no est
 
 - Sin base de datos, sin vector DB, sin backend propio, sin servidor.
 - Next.js (App Router) + TypeScript + Tailwind CSS, desplegable gratis en **Vercel**.
-- LLM: **Gemini API** (capa gratuita), modelo configurable por variable de entorno.
+- LLM: **Gemini API** (capa gratuita, Gemma 4 por defecto) con **Groq** como respaldo gratuito opcional; modelos configurables por variables de entorno.
 
 ---
 
@@ -24,7 +24,7 @@ Orquestador (lib/assistant.ts)
    │  2. retrieve(pregunta)          → lib/retrieval.ts  (BM25 sobre chunks)
    │                                   ↑ lib/documents.ts (carga + chunking de /content/*.md)
    │  3. buildUserPrompt(chunks)     → lib/prompts.ts   (system prompt estricto + delimitadores)
-   │  4. generateAnswer()            → lib/gemini.ts    (REST, salida JSON con esquema)
+   │  4. generateAnswer()            → lib/llm.ts       (Gemini/Gemma → Groq, respaldo)
    │  5. valida fuentes, canary anti-fuga
    ▼
 { answer, sources: [{ file }], status }
@@ -40,7 +40,7 @@ duplican datos. Solo `/api/chat` se ejecuta en runtime.
 | Documentos | `content/*.md`, `lib/documents.ts`, `lib/portfolio.ts` |
 | Retrieval | `lib/retrieval.ts` |
 | Prompt | `lib/prompts.ts` |
-| Cliente Gemini | `lib/gemini.ts` |
+| Clientes LLM | `lib/llm.ts` (cadena de respaldo), `lib/gemini.ts`, `lib/groq.ts`, `lib/model-output.ts` |
 | API | `app/api/chat/route.ts`, `lib/assistant.ts`, `lib/validation.ts`, `lib/rate-limit.ts` |
 | Compartido (cliente) | `lib/types.ts`, `lib/sections.ts` |
 | Tests | `scripts/test-rag.mts`, `scripts/fixtures/content/*.md` |
@@ -89,8 +89,8 @@ cliente, el build falla. La API key nunca sale del servidor.
    "¿Qué estudia?" encuentre `education.md` aunque el texto diga "Máster".
 5. **Búsqueda BM25**: la pregunta se puntúa contra todos los chunks. La pregunta anterior del usuario
    participa con peso 0,5 para resolver seguimientos ("¿y en qué año?").
-6. **Selección**: máximo 4 chunks, solo los que superan el 30 % de la puntuación del mejor y como mucho
-   4000 caracteres en total. Preguntas sin términos útiles que nombran a Borja ("¿Quién es Borja?")
+6. **Selección**: máximo 10 chunks (suficiente para listar todos los proyectos o certificaciones), solo los que
+   superan el 30 % de la puntuación del mejor y como mucho 6000 caracteres en total. Preguntas sin términos útiles que nombran a Borja ("¿Quién es Borja?")
    reciben el perfil de `about.md`. Preguntas sin relación ("¿Quién ganará las elecciones?") no reciben contexto.
 7. **Generación**: solo esos chunks se envían a Gemini, dentro de `<contexto>`, junto al system prompt.
    Gemini responde en JSON con esquema fijo: `{ status, answer, sources }`.
@@ -142,6 +142,8 @@ Sin `GEMINI_API_KEY` la web funciona y el chat muestra un error claro ("El asist
 | `GEMINI_API_KEY` | Sí | Clave de Google AI Studio. **Solo servidor**: nunca la prefijes con `NEXT_PUBLIC_`. |
 | `GEMINI_MODEL` | No | Modelo principal. Por defecto `gemma-4-26b-a4b-it`. |
 | `GEMINI_FALLBACK_MODELS` | No | Respaldo, separados por comas. Por defecto `gemini-3.5-flash,gemini-3.5-flash-lite`. |
+| `GROQ_API_KEY` | No (recomendada) | Key de Groq para el respaldo gratuito. **Solo servidor**. |
+| `GROQ_MODEL` | No | Modelo de Groq. Por defecto `openai/gpt-oss-120b`. |
 
 ### Configurar `GEMINI_API_KEY`
 
@@ -164,10 +166,29 @@ elegido por medición con el prompt real (sept. 2026, capa gratuita):
 | `gemini-2.5-*` | 404: restringidos a cuentas antiguas |
 
 Cada modelo tiene **su propia cuota diaria** (consúltalas en <https://aistudio.google.com/rate-limit>), así que
-encadenar modelos suma capacidad. La capa gratuita además tiene latencias muy variables y picos de saturación (503). Por eso la API usa **modelos de
-respaldo**: si el principal devuelve 429/5xx o tarda más de 25 s, prueba el siguiente de
-`GEMINI_FALLBACK_MODELS`, siempre dentro de 52 s (la función tiene `maxDuration = 60`).
+encadenar modelos suma capacidad. La capa gratuita además tiene latencias muy variables y picos en los que
+**todos** los modelos de Google devuelven 503 a la vez. Por eso la API usa una **cadena de respaldo** (`lib/llm.ts`):
+
+```
+GEMINI_MODEL  →  GROQ_MODEL (si hay GROQ_API_KEY)  →  GEMINI_FALLBACK_MODELS
+```
+
+Si un modelo devuelve 429/5xx, un JSON inválido o tarda más de 25 s, se prueba el siguiente; los 503 se
+reintentan una vez al final. Todo dentro de 52 s (la función tiene `maxDuration = 60`).
 Para repetir la medición: `npx tsx --conditions=react-server --env-file=.env.local scripts/bench-models.mts`.
+
+### Configurar Groq (respaldo gratuito, recomendado)
+
+[Groq](https://console.groq.com) es otro proveedor con capa gratuita y muy baja latencia. Sirve de respaldo
+cuando Google está saturado, con una infraestructura distinta.
+
+1. Crea una cuenta y una key en <https://console.groq.com/keys>.
+2. Añádela como `GROQ_API_KEY` en `.env.local` y en Vercel.
+3. Opcional: `GROQ_MODEL` (por defecto `openai/gpt-oss-120b`, compatible con JSON Schema estricto).
+   Límites gratuitos publicados para ese modelo: 30 peticiones/min, 1000/día y 8000 tokens/min
+   (cada pregunta usa unos 2-3 K tokens, así que absorbe unas 3 preguntas por minuto).
+
+Sin `GROQ_API_KEY` todo funciona igual, solo con Gemini.
 
 La serie 2.5 está restringida a cuentas que ya la usaban: no la uses en un proyecto nuevo. Modelos disponibles:
 <https://ai.google.dev/gemini-api/docs/models>. En Vercel, cambia la variable y haz *Redeploy*: no hay que
@@ -186,7 +207,7 @@ tocar código.
    ```
 2. En <https://vercel.com/new> importa el repositorio. Vercel detecta Next.js automáticamente
    (no hace falta `vercel.json`).
-3. Añade `GEMINI_API_KEY` (y opcionalmente `GEMINI_MODEL`) en *Environment Variables*.
+3. Añade `GEMINI_API_KEY` y `GROQ_API_KEY` (y opcionalmente las variables de modelo) en *Environment Variables*.
 4. *Deploy*. Cada `git push` a `main` redeploya.
 
 `next.config.ts` incluye `outputFileTracingIncludes` para que los Markdown de `/content` viajen dentro de
@@ -238,7 +259,8 @@ Formatos del resto de archivos (documentados también en comentarios dentro de c
 - **Reglas y tono**: `SYSTEM_PROMPT` en `lib/prompts.ts`. Los mensajes fijos de rechazo están en `REFUSAL`.
 - **Cantidad de contexto**: `TOP_K`, `RELATIVE_THRESHOLD` y `MAX_CONTEXT_CHARS` en `lib/retrieval.ts`.
 - **Tamaño de chunk**: `MAX_CHUNK_CHARS` en `lib/documents.ts`.
-- **Creatividad / longitud**: `temperature` y `maxOutputTokens` en `lib/gemini.ts`.
+- **Creatividad / longitud**: `temperature` y límite de tokens en `lib/gemini.ts` y `lib/groq.ts`.
+- **Cadena de modelos y tiempos**: `DEFAULTS`, `ATTEMPT_TIMEOUT_MS` y `TOTAL_BUDGET_MS` en `lib/llm.ts`.
 - **Límites de entrada**: `MAX_MESSAGE_LENGTH` y `MAX_HISTORY_MESSAGES` en `lib/types.ts`; rate limit en `lib/rate-limit.ts`.
 - **Preguntas sugeridas**: `SUGGESTED_QUESTIONS` en `lib/sections.ts`.
 

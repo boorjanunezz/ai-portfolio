@@ -1,7 +1,7 @@
 import "server-only";
 import { retrieve } from "./retrieval";
 import { buildUserPrompt, PROMPT_CANARY, REFUSAL, sanitizeUserText, SYSTEM_PROMPT } from "./prompts";
-import { generateAnswer } from "./gemini";
+import { generateAnswer } from "./llm";
 import type { AnswerStatus, ChatResponse, ChatTurn } from "./types";
 
 /**

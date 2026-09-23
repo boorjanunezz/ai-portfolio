@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { answerQuestion } from "@/lib/assistant";
-import { GeminiError } from "@/lib/gemini";
+import { LlmError } from "@/lib/model-output";
 import { isRateLimited } from "@/lib/rate-limit";
 import { validateChatRequest } from "@/lib/validation";
 import type { ChatError, ChatResponse } from "@/lib/types";
@@ -40,7 +40,7 @@ export async function POST(req: Request) {
     const response = await answerQuestion(input.message, input.history);
     return NextResponse.json<ChatResponse>(response);
   } catch (err) {
-    if (err instanceof GeminiError) return error(err.message, err.httpStatus);
+    if (err instanceof LlmError) return error(err.message, err.httpStatus);
     console.error("[api/chat] Error inesperado:", err);
     return error("Ha ocurrido un error inesperado.", 500);
   }

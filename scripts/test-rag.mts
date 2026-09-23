@@ -18,7 +18,7 @@ const { retrieve } = await import("../lib/retrieval");
 const { validateChatRequest } = await import("../lib/validation");
 const { answerQuestion } = await import("../lib/assistant");
 const { PROMPT_CANARY, sanitizeUserText } = await import("../lib/prompts");
-const { GeminiError } = await import("../lib/gemini");
+const { LlmError } = await import("../lib/model-output");
 
 let failed = 0;
 async function test(name: string, fn: () => void | Promise<void>) {
@@ -115,7 +115,7 @@ process.env.GEMINI_MODEL = "gemini-test";
 
 await test("sin GEMINI_API_KEY → error 503", async () => {
   delete process.env.GEMINI_API_KEY;
-  await assert.rejects(answerQuestion("¿Qué estudia?", []), (e: unknown) => e instanceof GeminiError && e.httpStatus === 503);
+  await assert.rejects(answerQuestion("¿Qué estudia?", []), (e: unknown) => e instanceof LlmError && e.httpStatus === 503);
   process.env.GEMINI_API_KEY = "test-key";
 });
 
@@ -159,16 +159,16 @@ await test("si el modelo filtra el prompt (canary) → se sustituye por rechazo"
 
 await test("respuesta no-JSON o con esquema incorrecto → error 502", async () => {
   mockGemini("esto no es json");
-  await assert.rejects(answerQuestion("¿Qué estudia?", []), (e: unknown) => e instanceof GeminiError && e.httpStatus === 502);
+  await assert.rejects(answerQuestion("¿Qué estudia?", []), (e: unknown) => e instanceof LlmError && e.httpStatus === 502);
   mockGemini({ status: "maybe", answer: "x", sources: [] });
-  await assert.rejects(answerQuestion("¿Qué estudia?", []), (e: unknown) => e instanceof GeminiError && e.httpStatus === 502);
+  await assert.rejects(answerQuestion("¿Qué estudia?", []), (e: unknown) => e instanceof LlmError && e.httpStatus === 502);
 });
 
 await test("error 429 de Gemini → error 429", async () => {
   globalThis.fetch = (async () => new Response("quota", { status: 429 })) as unknown as typeof fetch;
   const originalError = console.error;
   console.error = () => {};
-  await assert.rejects(answerQuestion("¿Qué estudia?", []), (e: unknown) => e instanceof GeminiError && e.httpStatus === 429);
+  await assert.rejects(answerQuestion("¿Qué estudia?", []), (e: unknown) => e instanceof LlmError && e.httpStatus === 429);
   console.error = originalError;
 });
 
@@ -192,5 +192,43 @@ await test("fallback: si el modelo principal da 503, usa el siguiente", async ()
   assert.equal(r.status, "no_info");
 });
 
-console.log(failed ?`\n${failed} test(s) fallidos\n` : "\nTodo OK\n");
+await test("cadena con Groq: Gemini 503 → Groq (Bearer, JSON schema estricto)", async () => {
+  const calls: { url: string; auth?: string; body: any }[] = [];
+  globalThis.fetch = (async (url: string, init: RequestInit) => {
+    const headers = init.headers as Record<string, string>;
+    calls.push({ url, auth: headers.Authorization, body: JSON.parse(String(init.body)) });
+    if (url.includes("generativelanguage")) return new Response("high demand", { status: 503 });
+    const content = JSON.stringify({ status: "no_info", answer: "No tengo información sobre eso en mi base de conocimiento.", sources: [] });
+    return new Response(JSON.stringify({ choices: [{ message: { content } }] }));
+  }) as unknown as typeof fetch;
+  process.env.GROQ_API_KEY = "groq-test-key";
+  const originalError = console.error;
+  const originalWarn = console.warn;
+  console.error = console.warn = () => {};
+  const r = await answerQuestion("¿Dónde vive Borja?", []);
+  console.error = originalError;
+  console.warn = originalWarn;
+  delete process.env.GROQ_API_KEY;
+  assert.equal(r.status, "no_info");
+  assert.equal(calls.length, 2, "Gemini primero y luego Groq");
+  assert.match(calls[1]!.url, /api\.groq\.com/);
+  assert.equal(calls[1]!.auth, "Bearer groq-test-key");
+  assert.equal(calls[1]!.body.model, "openai/gpt-oss-120b");
+  assert.equal(calls[1]!.body.response_format.json_schema.strict, true);
+});
+
+await test("respuesta 'answered' con frase de rechazo → no_info sin fuentes", async () => {
+  mockGemini({ status: "answered", answer: "No tengo información sobre eso en mi base de conocimiento.", sources: ["about.md#0"] });
+  const r = await answerQuestion("¿Dónde vive Borja?", []);
+  assert.equal(r.status, "no_info");
+  assert.deepEqual(r.sources, []);
+});
+
+await test("JSON envuelto en ``` (Gemma) se acepta", async () => {
+  mockGemini('```json\n{"status":"off_topic","answer":"Solo puedo responder preguntas relacionadas con el perfil de Borja.","sources":[]}\n```');
+  const r = await answerQuestion("¿Qué es Docker?", []);
+  assert.equal(r.status, "off_topic");
+});
+
+console.log(failed ? `\n${failed} test(s) fallidos\n` : "\nTodo OK\n");
 process.exit(failed ? 1 : 0);
