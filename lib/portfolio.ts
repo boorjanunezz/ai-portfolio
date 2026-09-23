@@ -1,187 +1,246 @@
 import "server-only";
+import fs from "node:fs";
+import path from "node:path";
 import { isPlaceholder, loadMarkdownFiles, stripComments } from "./documents";
+import type { CertItem, ContactLink, L, ProjectItem, SiteData, SkillGroup, TimelineEntry } from "./site-types";
 
 /**
- * Datos derivados de /content para las secciones de la web.
- * No hay datos duplicados: todo sale de los mismos Markdown que usa el asistente.
- * Se ejecuta en build (la página es estática), así que no cuesta nada en runtime.
+ * Datos de la web derivados de /content (los mismos Markdown que usa el asistente).
+ * Se ejecuta en build: la página es estática.
+ *
+ * Convenciones de los Markdown:
+ *  - "## Título" = una entrada; "### Título" = sub-entrada (p. ej. cada puesto en Experiencia).
+ *  - "Clave: valor" solo es un campo si la clave está en la lista de ese archivo (KEYS);
+ *    cualquier otra línea con dos puntos ("TFM: ...", "Español: nativo.") es texto normal.
+ *  - "EN:", "EN título:", "EN organización:" = traducción opcional para la web en inglés.
+ *  - Lo marcado con PLACEHOLDER no se muestra.
  */
 
-interface Section {
+interface Node {
   title: string;
-  placeholder: boolean;
   fields: Record<string, string>;
   paragraphs: string[];
   items: string[];
+  children: Node[];
 }
 
-export interface TextBlock {
-  text: string;
-  placeholder: boolean;
-}
+const EN_KEYS = ["en", "en título", "en titulo", "en organización", "en organizacion"];
+const CONTACT_KEYS = ["email", "linkedin", "github", "web", "twitter", "x"];
+const KEYS: Record<string, string[]> = {
+  "about.md": ["titular", "empresa", "periodo", "resumen", ...CONTACT_KEYS, ...EN_KEYS],
+  "education.md": ["centro", "periodo", "estado", ...EN_KEYS],
+  "certifications.md": ["emisor", "fecha", "credencial", ...EN_KEYS],
+  "projects.md": ["tecnologías", "tecnologias", "github", "demo", "imagen", ...EN_KEYS],
+  "skills.md": EN_KEYS,
+};
 
-export interface ContactLink {
-  label: string;
-  value?: string;
-  href?: string;
-}
+const MONTHS = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
 
-export interface Project {
-  name: string;
-  placeholder: boolean;
-  description: TextBlock[];
-  technologies: string[];
-  github?: string; // URL, "pending" (PLACEHOLDER) o ausente
-  demo?: string;
-  image?: string;
-}
+// ── Parser ────────────────────────────────────────────────────────────
 
-export interface SkillGroup {
-  category: string;
-  items: { name: string; detail?: string; placeholder: boolean }[];
-}
-
-export interface Entry {
-  title: string;
-  placeholder: boolean;
-  meta: string[]; // centro, periodo, emisor, fecha... ya filtrados
-  description: TextBlock[];
-  url?: string;
-}
-
-function readFile(file: string): string {
-  return stripComments(loadMarkdownFiles().find((f) => f.file === file)?.content ?? "");
-}
-
-/**
- * Divide un Markdown en secciones "##" con campos "Clave: valor", listas y párrafos.
- * Solo cuentan como campo las claves de `fieldKeys`: así "TFM: ..." o "Español: nativo."
- * siguen siendo texto normal.
- */
-function parseSections(markdown: string, fieldKeys: readonly string[] = []): Section[] {
-  const sections: Section[] = [];
-  let current: Section | null = null;
+function parseFile(file: string): Node {
+  const markdown = stripComments(loadMarkdownFiles().find((f) => f.file === file)?.content ?? "");
+  const keys = KEYS[file] ?? [];
+  const root: Node = { title: "", fields: {}, paragraphs: [], items: [], children: [] };
+  let section: Node | null = null;
+  let current: Node = root;
   let paragraph: string[] = [];
 
   const closeParagraph = () => {
-    if (current && paragraph.length) current.paragraphs.push(paragraph.join(" "));
+    if (paragraph.length) current.paragraphs.push(paragraph.join(" "));
     paragraph = [];
   };
+  const newNode = (title: string): Node => ({ title, fields: {}, paragraphs: [], items: [], children: [] });
 
   for (const rawLine of markdown.split(/\r?\n/)) {
     const line = rawLine.trim();
-    const heading = /^##\s+(.*)$/.exec(line);
+    const heading = /^(#{2,3})\s+(.*)$/.exec(line);
     if (heading) {
       closeParagraph();
-      const title = heading[1]!.trim();
-      current = { title, placeholder: isPlaceholder(title), fields: {}, paragraphs: [], items: [] };
-      sections.push(current);
+      const node = newNode(heading[2]!.trim());
+      if (heading[1] === "##" || !section) {
+        root.children.push(node);
+        section = node;
+      } else {
+        section.children.push(node);
+      }
+      current = node;
       continue;
     }
-    if (!current) continue;
-
+    if (!line || isPlaceholder(line)) {
+      closeParagraph();
+      continue;
+    }
     const item = /^[-*]\s+(.*)$/.exec(line);
     const field = /^([\p{L} ]{2,30}):\s*(.*)$/u.exec(line);
-    if (!line) {
-      closeParagraph();
-    } else if (item) {
+    const key = field?.[1]!.trim().toLowerCase();
+    if (item) {
       closeParagraph();
       current.items.push(item[1]!.trim());
-    } else if (field && fieldKeys.includes(field[1]!.trim().toLowerCase())) {
+    } else if (field && key && keys.includes(key)) {
       closeParagraph();
-      current.fields[field[1]!.trim().toLowerCase()] = field[2]!.trim();
+      if (field[2]!.trim()) current.fields[key] = field[2]!.trim();
     } else {
-      // Cada línea placeholder es su propio bloque para poder marcarla aparte.
-      if (isPlaceholder(line)) {
-        closeParagraph();
-        current.paragraphs.push(line);
-      } else {
-        paragraph.push(line);
-      }
+      paragraph.push(line);
     }
   }
   closeParagraph();
-  return sections;
+  return root;
 }
 
-/** Valor real de un campo, o undefined si está vacío o es placeholder. */
-function value(raw: string | undefined): string | undefined {
-  return raw && !isPlaceholder(raw) ? raw : undefined;
-}
+// ── Helpers ───────────────────────────────────────────────────────────
+
+const real = (nodes: Node[]) => nodes.filter((n) => !isPlaceholder(n.title));
+const find = (root: Node, title: string) => root.children.find((n) => n.title.toLowerCase() === title);
+const field = (node: Node | undefined, ...keys: string[]) => keys.map((k) => node?.fields[k]).find(Boolean);
+const text = (node: Node | undefined) => node?.paragraphs.join(" ") ?? "";
+const firstSentence = (s: string) => s.split(/(?<=\.)\s/)[0] ?? s;
+const years = (when: string) => (when.match(/\d{4}/g) ?? []).map(Number);
 
 /** Solo URLs http(s)/mailto, para no inyectar enlaces javascript: desde el Markdown. */
 function safeUrl(raw: string | undefined): string | undefined {
-  const v = value(raw);
-  return v && /^(https?:\/\/|mailto:)/i.test(v) ? v : undefined;
+  return raw && /^(https?:\/\/|mailto:)/i.test(raw) ? raw : undefined;
 }
 
-/** Enlace de proyecto: URL real, "pending" si es PLACEHOLDER, o undefined si está vacío (no se muestra). */
-function link(raw: string | undefined): string | undefined {
-  if (raw && isPlaceholder(raw)) return "pending";
-  return safeUrl(raw);
+function lText(es: string, en: string | undefined): L {
+  return en ? { es, en } : { es };
 }
 
-const CONTACT_KEYS = ["email", "linkedin", "github", "web", "twitter", "x", "teléfono", "telefono"];
-const PROJECT_KEYS = ["tecnologías", "tecnologias", "github", "demo", "imagen"];
+// ── Secciones ─────────────────────────────────────────────────────────
 
-function blocks(paragraphs: string[]): TextBlock[] {
-  return paragraphs.map((text) => ({ text: text.replace(/^PLACEHOLDER:\s*/i, ""), placeholder: isPlaceholder(text) }));
-}
-
-export function getAbout() {
-  const sections = parseSections(readFile("about.md"), CONTACT_KEYS);
-  const profile = sections.find((s) => s.title.toLowerCase() === "perfil");
-  const intro = profile?.paragraphs.find((p) => !isPlaceholder(p)) ?? "";
-  const details = sections
-    .filter((s) => s !== profile && s.title.toLowerCase() !== "contacto")
-    .map((s) => ({ title: s.title, description: blocks(s.paragraphs) }));
-  return { intro, profile: blocks(profile?.paragraphs ?? []), details };
-}
-
-export function getContact(): ContactLink[] {
-  const contact = parseSections(readFile("about.md"), CONTACT_KEYS).find((s) => s.title.toLowerCase() === "contacto");
-  return Object.entries(contact?.fields ?? {}).map(([key, raw]) => {
-    const label = key.charAt(0).toUpperCase() + key.slice(1);
-    const v = value(raw);
-    const href = key === "email" && v && !v.startsWith("mailto:") ? `mailto:${v}` : safeUrl(raw);
-    return { label: label === "Linkedin" ? "LinkedIn" : label === "Github" ? "GitHub" : label, value: v, href };
+function workEntries(about: Node): TimelineEntry[] {
+  return real(find(about, "experiencia")?.children ?? []).map((n) => {
+    const when = field(n, "periodo") ?? "";
+    return {
+      when,
+      kind: "work",
+      title: lText(n.title, field(n, "en título", "en titulo")),
+      org: lText(field(n, "empresa") ?? "", field(n, "en organización", "en organizacion")),
+      text: lText(text(n), field(n, "en")),
+      now: /—\s*$|-\s*$|actualidad|presente|present/i.test(when),
+    };
   });
 }
 
-export function getProjects(): Project[] {
-  return parseSections(readFile("projects.md"), PROJECT_KEYS).map((s) => ({
-    name: s.title.replace(/^PLACEHOLDER:\s*/i, ""),
-    placeholder: s.placeholder,
-    description: blocks(s.paragraphs),
-    technologies: (value(s.fields["tecnologías"] ?? s.fields["tecnologias"]) ?? "")
-      .split(",")
-      .map((t) => t.trim())
-      .filter(Boolean),
-    github: link(s.fields.github),
-    demo: link(s.fields.demo),
-    image: value(s.fields.imagen)?.startsWith("/") ? s.fields.imagen : undefined,
+function educationEntries(education: Node): TimelineEntry[] {
+  return real(education.children).map((n) => ({
+    when: field(n, "periodo") ?? "",
+    kind: "edu",
+    title: lText(n.title, field(n, "en título", "en titulo")),
+    org: lText(field(n, "centro") ?? "", field(n, "en organización", "en organizacion")),
+    text: lText(text(n), field(n, "en")),
+    now: false,
   }));
 }
 
-export function getSkills(): SkillGroup[] {
-  return parseSections(readFile("skills.md")).map((s) => ({
-    category: s.title,
-    items: s.items.map((raw) => {
-      const [name, detail] = raw.replace(/^PLACEHOLDER:\s*/i, "").split(/\s+—\s+/);
-      return { name: name!.trim(), detail: detail?.trim(), placeholder: isPlaceholder(raw) };
-    }),
+/** Más reciente primero: por año de inicio y, a igualdad, por año de fin (abierto = actual). */
+function sortTimeline(entries: TimelineEntry[]): TimelineEntry[] {
+  const key = (e: TimelineEntry) => {
+    const y = years(e.when);
+    return [y[0] ?? 0, e.now ? 9999 : (y.at(-1) ?? 0)] as const;
+  };
+  return [...entries].sort((a, b) => {
+    const [as, ae] = key(a);
+    const [bs, be] = key(b);
+    return bs - as || be - ae;
+  });
+}
+
+function projects(): ProjectItem[] {
+  return real(parseFile("projects.md").children).map((n) => ({
+    name: n.title,
+    summary: lText(firstSentence(n.paragraphs[0] ?? ""), field(n, "en")),
+    technologies: (field(n, "tecnologías", "tecnologias") ?? "").split(",").map((t) => t.trim()).filter(Boolean),
+    github: safeUrl(field(n, "github")),
+    demo: safeUrl(field(n, "demo")),
+    image: field(n, "imagen")?.startsWith("/") ? field(n, "imagen") : undefined,
   }));
 }
 
-function getEntries(file: string, metaKeys: string[], urlKey?: string): Entry[] {
-  return parseSections(readFile(file), urlKey ? [...metaKeys, urlKey] : metaKeys).map((s) => ({
-    title: s.title.replace(/^PLACEHOLDER:\s*/i, ""),
-    placeholder: s.placeholder,
-    meta: metaKeys.map((k) => value(s.fields[k])).filter((v): v is string => Boolean(v)),
-    description: blocks(s.paragraphs),
-    url: urlKey ? safeUrl(s.fields[urlKey]) : undefined,
+function formatDate(raw: string | undefined): string {
+  if (!raw) return "";
+  const lower = raw.toLowerCase();
+  const month = MONTHS.findIndex((m) => lower.includes(m));
+  const year = raw.match(/\d{4}/)?.[0];
+  return month >= 0 && year ? `${String(month + 1).padStart(2, "0")} · ${year}` : raw;
+}
+
+function certs(): CertItem[] {
+  return real(parseFile("certifications.md").children).map((n) => {
+    const code = /\(([^)]+)\)\s*$/.exec(n.title)?.[1] ?? "";
+    const name = n.title.replace(/\s*\([^)]+\)\s*$/, "").replace(/^[^:]+:\s*/, "");
+    return { code, name, issuer: field(n, "emisor") ?? "", date: formatDate(field(n, "fecha")), url: safeUrl(field(n, "credencial")) };
+  });
+}
+
+function skills(): SkillGroup[] {
+  return real(parseFile("skills.md").children).map((n) => ({
+    category: lText(n.title, field(n, "en")),
+    items: n.items.map((i) => i.split(/\s+—\s+/)[0]!.trim()),
   }));
 }
 
-export const getEducation = () => getEntries("education.md", ["centro", "periodo", "estado"]);
-export const getCertifications = () => getEntries("certifications.md", ["emisor", "fecha"], "credencial");
+function contactLinks(about: Node): { email?: string; links: ContactLink[] } {
+  const c = find(about, "contacto");
+  const email = field(c, "email");
+  const links = CONTACT_KEYS.filter((k) => k !== "email")
+    .map((k) => ({ key: k, href: safeUrl(field(c, k)) }))
+    .filter((l): l is { key: string; href: string } => Boolean(l.href))
+    .map(({ key, href }) => ({
+      label: key === "linkedin" ? "LinkedIn" : key === "github" ? "GitHub" : key.charAt(0).toUpperCase() + key.slice(1),
+      value: href.replace(/^https?:\/\/(www\.)?/, "").replace(/^linkedin\.com\//, "").replace(/\/$/, ""),
+      href,
+    }));
+  return { email, links };
+}
+
+// ── Ensamblado ────────────────────────────────────────────────────────
+
+export function getSiteData(): SiteData {
+  const aboutRaw = loadMarkdownFiles().find((f) => f.file === "about.md")?.content ?? "";
+  const about = parseFile("about.md");
+  const education = parseFile("education.md");
+  const profile = find(about, "perfil");
+
+  const timeline = sortTimeline([...workEntries(about), ...educationEntries(education)]);
+  const current = timeline.find((e) => e.now);
+  const location = text(find(about, "ubicación") ?? find(about, "ubicacion"))
+    .replace(/\s*\([^)]*\)/, "")
+    .replace(/\.$/, "");
+  const where = (sep: string, e?: TimelineEntry, en = false) =>
+    [e ? `${en ? e.title.en ?? e.title.es : e.title.es}${sep}${en ? e.org.en ?? e.org.es : e.org.es}` : "", location]
+      .filter(Boolean)
+      .join(" · ");
+
+  const languagesNode = find(about, "idiomas");
+  const projectList = projects();
+  const certList = certs();
+  const issuers = [...new Set(certList.map((c) => c.issuer))];
+  const master = real(education.children).find((n) => /(\d+)\s*horas/.test(text(n)));
+  const hours = master ? /(\d+)\s*horas/.exec(text(master))![1] : undefined;
+
+  const stats: SiteData["stats"] = [
+    {
+      value: String(certList.length),
+      label: issuers.length === 1 ? { es: `certificaciones ${issuers[0]}`, en: `${issuers[0]} certifications` } : { es: "certificaciones", en: "certifications" },
+    },
+    { value: String(projectList.length), label: { es: "proyectos documentados", en: "documented projects" } },
+  ];
+  if (master && hours) stats.push({ value: `${hours} h`, label: lText(master.title, field(master, "en título", "en titulo")) });
+
+  return {
+    name: /^#\s+Sobre\s+(.+)$/m.exec(aboutRaw)?.[1]?.trim() ?? "Borja Núñez",
+    headline: field(profile, "titular") ?? "",
+    meta: { es: where(" en ", current), en: where(" at ", current, true) },
+    languages: lText(field(languagesNode, "resumen") ?? text(languagesNode), field(languagesNode, "en")),
+    lead: lText(profile?.paragraphs.at(-1) ?? "", field(profile, "en")),
+    stats,
+    timeline,
+    projects: projectList,
+    certs: certList,
+    skills: skills(),
+    ...contactLinks(about),
+    cvUrl: fs.existsSync(path.join(process.cwd(), "public", "cv.pdf")) ? "/cv.pdf" : undefined,
+    files: loadMarkdownFiles().map((f) => f.file),
+  };
+}

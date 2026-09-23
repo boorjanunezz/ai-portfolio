@@ -2,7 +2,7 @@
   "name": "borja-portfolio",
   "version": "1.0.0",
   "private": true,
-  "description": "Portfolio personal de Borja NÃºÃ±ez con asistente de IA (RAG ligero sobre Markdown + Gemini).",
+  "description": "Portfolio personal de Borja Núñez con asistente de IA (RAG ligero sobre Markdown + Gemini/Groq, respuestas en streaming).",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

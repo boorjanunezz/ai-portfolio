@@ -1,35 +1,18 @@
-import type { SkillGroup } from "@/lib/portfolio";
-import { Pending, SectionShell } from "./Shared";
+"use client";
 
-export function Skills({ groups, index }: { groups: SkillGroup[]; index: number }) {
+import type { SkillGroup } from "@/lib/site-types";
+import { useLang } from "../LangProvider";
+
+export function Skills({ groups }: { groups: SkillGroup[] }) {
+  const { pick } = useLang();
   return (
-    <SectionShell id="skills" index={index} title="Tecnologías" file="skills.md">
-      <div className="grid gap-x-12 gap-y-12 sm:grid-cols-2">
-        {groups.map((g) => (
-          <div key={g.category}>
-            <h3 className="border-b border-ink pb-2 text-xs font-medium uppercase tracking-[0.14em] text-ink">{g.category}</h3>
-            <ul className="mt-4 space-y-3">
-              {g.items.length === 0 && (
-                <li>
-                  <Pending />
-                </li>
-              )}
-              {g.items.map((item) => (
-                <li key={item.name}>
-                  {item.placeholder ? (
-                    <Pending>{item.name}</Pending>
-                  ) : (
-                    <>
-                      <span className="font-medium text-ink">{item.name}</span>
-                      {item.detail && <span className="text-ink-soft"> — {item.detail}</span>}
-                    </>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </div>
-        ))}
-      </div>
-    </SectionShell>
+    <dl className="m-0">
+      {groups.map((g) => (
+        <div key={g.category.es} className="flex flex-wrap gap-x-6 gap-y-1.5 border-t border-rule py-4.5">
+          <dt className="flex-[0_0_11rem] text-xs font-medium uppercase leading-[27px] tracking-[0.14em]">{pick(g.category)}</dt>
+          <dd className="m-0 flex-[1_1_320px] text-ink-soft">{g.items.join(" · ")}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }

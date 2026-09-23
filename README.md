@@ -14,7 +14,7 @@ Rechaza preguntas no relacionadas con Borja y dice claramente cuando algo no est
 ## Arquitectura
 
 ```
-Navegador (components/chat/Chat.tsx)
+Navegador (components/assistant/useChat.ts)
    │  POST /api/chat  { message, history }
    ▼
 Route Handler serverless (app/api/chat/route.ts)
@@ -24,51 +24,66 @@ Orquestador (lib/assistant.ts)
    │  2. retrieve(pregunta)          → lib/retrieval.ts  (BM25 sobre chunks)
    │                                   ↑ lib/documents.ts (carga + chunking de /content/*.md)
    │  3. buildUserPrompt(chunks)     → lib/prompts.ts   (system prompt estricto + delimitadores)
-   │  4. generateAnswer()            → lib/llm.ts       (Gemini/Gemma → Groq, respaldo)
-   │  5. valida fuentes, canary anti-fuga
+   │  4. streamAnswer()              → lib/llm.ts       (Gemma/Gemini → Groq, respaldo, streaming)
+   │  5. oculta la marca de fuentes, vigila el canary, valida fuentes
    ▼
-{ answer, sources: [{ file }], status }
+Streaming NDJSON: {"type":"delta","text":"…"} … {"type":"done","sources":[{"file":"…"}],"status":"…"}
 ```
 
 La página principal (`app/page.tsx`) es **estática**: se genera en build leyendo los mismos Markdown
-(`lib/portfolio.ts`), así que las secciones About/Projects/Skills/Education/Certifications/Contact no
-duplican datos. Solo `/api/chat` se ejecuta en runtime.
+(`lib/portfolio.ts`), así que la web no duplica datos. Solo `/api/chat` se ejecuta en runtime.
 
 | Capa | Archivos |
 |---|---|
-| UI | `app/page.tsx`, `app/layout.tsx`, `app/globals.css`, `components/chat/*`, `components/sections/*` |
-| Documentos | `content/*.md`, `lib/documents.ts`, `lib/portfolio.ts` |
+| UI | `app/page.tsx`, `app/layout.tsx`, `app/globals.css`, `components/*` (portada, cabecera, secciones, panel del asistente) |
+| Idioma ES/EN | `lib/i18n.ts` (textos de interfaz, secciones, preguntas sugeridas), `components/LangProvider.tsx` |
+| Documentos | `content/*.md`, `lib/documents.ts` (chat), `lib/portfolio.ts` + `lib/site-types.ts` (web) |
 | Retrieval | `lib/retrieval.ts` |
 | Prompt | `lib/prompts.ts` |
-| Clientes LLM | `lib/llm.ts` (cadena de respaldo), `lib/gemini.ts`, `lib/groq.ts`, `lib/model-output.ts` |
+| Clientes LLM | `lib/llm.ts` (cadena de respaldo), `lib/gemini.ts`, `lib/groq.ts`, `lib/llm-shared.ts` |
 | API | `app/api/chat/route.ts`, `lib/assistant.ts`, `lib/validation.ts`, `lib/rate-limit.ts` |
-| Compartido (cliente) | `lib/types.ts`, `lib/sections.ts` |
+| Compartido (cliente) | `lib/types.ts` (protocolo del chat), `lib/site-types.ts`, `lib/i18n.ts` |
 | Tests | `scripts/test-rag.mts`, `scripts/fixtures/content/*.md` |
 
 Todos los módulos de servidor importan `server-only`: si alguien los importa desde un componente
-cliente, el build falla. La API key nunca sale del servidor.
+cliente, el build falla. Las API keys nunca salen del servidor.
+
+### Respuestas en streaming
+
+`/api/chat` responde con `application/x-ndjson`: una línea JSON por evento (tipo `ChatEvent` en `lib/types.ts`).
+
+| Evento | Significado |
+|---|---|
+| `delta` | trozo de texto de la respuesta; la interfaz lo añade con un cursor parpadeante |
+| `reset` | el modelo falló a mitad y otro empieza de cero: se borra lo recibido |
+| `done` | fin, con `sources` y `status` (`answered`, `no_info`, `off_topic`) |
+| `error` | fin con un error apto para el usuario |
+
+El modelo escribe texto normal y cierra con la marca `[[fuentes: projects.md#0, …]]`. El servidor nunca
+reenvía esa marca: retiene los últimos caracteres hasta saber si son el comienzo de la marca (o del canary).
+Los errores de validación (400/413/415/429) se devuelven como JSON normal antes de empezar el stream.
 
 ### Estructura de carpetas
 
 ```
 .
 ├── app/
-│   ├── api/chat/route.ts      # endpoint del chat
+│   ├── api/chat/route.ts      # endpoint del chat (streaming)
 │   ├── globals.css            # tokens de diseño (OKLCH) y animaciones
 │   ├── layout.tsx             # fuentes y metadatos
-│   └── page.tsx               # página: intro + chat + secciones
+│   └── page.tsx               # página estática: <Portfolio data={getSiteData()} />
 ├── components/
-│   ├── chat/                  # Chat, Message, Thinking, RichText
-│   └── sections/              # About, Projects, Skills, Entries, Contact, Shared
+│   ├── Portfolio.tsx          # composición, panel abierto/cerrado, atajos "/" y Esc, barra fija
+│   ├── SiteHeader.tsx         # cabecera: nav, ES/EN, CV
+│   ├── Hero.tsx               # portada: "indexando…", nombre, barra de pregunta, cifras
+│   ├── LangProvider.tsx       # idioma activo (recordado en el navegador)
+│   ├── assistant/             # AssistantPanel, useChat (streaming), RichText
+│   └── sections/              # Section, Timeline, Projects, Certifications, Skills, Contact
 ├── content/                   # ← FUENTE DE VERDAD (Markdown)
-│   ├── about.md
-│   ├── certifications.md
-│   ├── education.md
-│   ├── projects.md
-│   └── skills.md
 ├── lib/                       # lógica (ver tabla)
+├── public/cv.pdf              # CV descargable (si no existe, la web oculta el botón)
 ├── public/projects/           # imágenes opcionales de proyectos
-├── scripts/                   # tests del RAG + fixtures ficticios
+├── scripts/                   # tests del RAG, fixtures ficticios, benchmark y diagnóstico
 ├── DESIGN.md                  # dirección de arte y reglas de diseño
 ├── .env.example
 └── next.config.ts
@@ -92,8 +107,9 @@ cliente, el build falla. La API key nunca sale del servidor.
 6. **Selección**: máximo 10 chunks (suficiente para listar todos los proyectos o certificaciones), solo los que
    superan el 30 % de la puntuación del mejor y como mucho 6000 caracteres en total. Preguntas sin términos útiles que nombran a Borja ("¿Quién es Borja?")
    reciben el perfil de `about.md`. Preguntas sin relación ("¿Quién ganará las elecciones?") no reciben contexto.
-7. **Generación**: solo esos chunks se envían a Gemini, dentro de `<contexto>`, junto al system prompt.
-   Gemini responde en JSON con esquema fijo: `{ status, answer, sources }`.
+7. **Generación**: solo esos chunks se envían al modelo, dentro de `<contexto>`, junto al system prompt.
+   El modelo responde en streaming con texto normal y termina con la marca `[[fuentes: id1, id2]]`.
+   El estado sale de la propia respuesta: las frases de rechazo son fijas.
 8. **Fuentes**: el servidor traduce los ids citados a archivos, **descartando cualquier id que no se haya
    enviado** (el modelo no puede inventar fuentes). Si el estado es `no_info` u `off_topic`, no hay fuentes.
 
@@ -108,8 +124,9 @@ del usuario y no revelar ni modificar sus instrucciones. Defensas adicionales:
 - Se eliminan de la entrada del usuario las etiquetas delimitadoras y caracteres invisibles (zero-width, bidi…).
 - El historial va como texto dentro de `<historial>`, no como turnos del modelo: un cliente malicioso no puede
   "falsificar" respuestas previas del asistente con autoridad de modelo.
-- Salida JSON con esquema y validación estricta; respuestas inesperadas → error 502 controlado.
-- **Canary**: el prompt contiene un identificador secreto; si aparece en una respuesta, se sustituye por un rechazo.
+- La marca de fuentes nunca llega al navegador y los ids se validan contra los chunks enviados.
+- **Canary**: el prompt contiene un identificador secreto; si aparece en el stream, se emite `reset` y la
+  respuesta se sustituye por un rechazo (el servidor retiene los últimos caracteres para que nunca llegue a enviarse).
 - Longitud máxima de 1000 caracteres, cuerpo máximo 20 KB, historial máximo 6 turnos, rate limit de 10 req/min por IP.
 
 ---
@@ -153,7 +170,7 @@ Sin `GEMINI_API_KEY` la web funciona y el chat muestra un error claro ("El asist
 
 ### Configurar `GEMINI_MODEL`
 
-Cualquier modelo de Gemini que soporte `generateContent` con salida JSON (*structured output*).
+Cualquier modelo de Gemini o Gemma que soporte `streamGenerateContent`.
 Por defecto se usa **`gemma-4-26b-a4b-it`** (Gemma 4, servido por la misma Gemini API y con la misma key),
 elegido por medición con el prompt real (sept. 2026, capa gratuita):
 
@@ -173,8 +190,9 @@ encadenar modelos suma capacidad. La capa gratuita además tiene latencias muy v
 GEMINI_MODEL  →  GROQ_MODEL (si hay GROQ_API_KEY)  →  GEMINI_FALLBACK_MODELS
 ```
 
-Si un modelo devuelve 429/5xx, un JSON inválido o tarda más de 25 s, se prueba el siguiente; los 503 se
-reintentan una vez al final. Todo dentro de 52 s (la función tiene `maxDuration = 60`).
+Si un modelo devuelve 429/5xx, una respuesta vacía o no envía el primer token en 20 s, se prueba el siguiente;
+si falla a mitad de respuesta, se emite `reset` y el siguiente empieza de cero. Los 503 se reintentan una vez
+al final. Todo dentro de 55 s (la función tiene `maxDuration = 60`).
 Para repetir la medición: `npx tsx --conditions=react-server --env-file=.env.local scripts/bench-models.mts`.
 
 ### Configurar Groq (respaldo gratuito, recomendado)
@@ -184,7 +202,7 @@ cuando Google está saturado, con una infraestructura distinta.
 
 1. Crea una cuenta y una key en <https://console.groq.com/keys>.
 2. Añádela como `GROQ_API_KEY` en `.env.local` y en Vercel.
-3. Opcional: `GROQ_MODEL` (por defecto `openai/gpt-oss-120b`, compatible con JSON Schema estricto).
+3. Opcional: `GROQ_MODEL` (por defecto `openai/gpt-oss-120b`).
    Límites gratuitos publicados para ese modelo: 30 peticiones/min, 1000/día y 8000 tokens/min
    (cada pregunta usa unos 2-3 K tokens, así que absorbe unas 3 preguntas por minuto).
 
@@ -220,13 +238,15 @@ la función serverless de `/api/chat`.
 Edita los Markdown de `/content`. Son la **única fuente de verdad** del asistente y de la web.
 
 - Sustituye cada `PLACEHOLDER` por información real (y borra la palabra). Mientras una línea contenga
-  `PLACEHOLDER`, el asistente la ignora y la web la muestra como "pendiente".
+  `PLACEHOLDER`, el asistente la ignora y la web no la muestra.
 - Usa encabezados `##` para cada bloque: el chunking se basa en ellos y el título ayuda al retrieval.
 - Escribe frases completas y con las palabras que usaría alguien al preguntar ("Trabaja como…",
   "Ha usado Azure AI Foundry para…"). El retrieval es léxico: si una palabra no aparece, no se encuentra.
 - Puedes crear archivos nuevos (p. ej. `content/experience.md`): se indexan automáticamente. Si quieres
   que aparezcan como sección de la web o que sus fuentes enlacen a una sección, añádelos en
-  `lib/sections.ts` y, opcionalmente, palabras-pista en `FILE_HINTS` (`lib/retrieval.ts`).
+  `lib/i18n.ts` (`SECTIONS` y `FILE_SECTION`) y, opcionalmente, palabras-pista en `FILE_HINTS` (`lib/retrieval.ts`).
+- **Web en inglés**: añade líneas `EN: ...` (y `EN título:`, `EN organización:` donde aplique) con la traducción.
+  Son opcionales: si faltan, la web en inglés muestra el texto en español. El asistente también las lee.
 - Después ejecuta `npm test -- --real` para comprobar que no quedan placeholders en el índice.
 
 ## Añadir un proyecto
@@ -242,17 +262,25 @@ Tecnologías: Python, Azure OpenAI, FastAPI
 GitHub: https://github.com/usuario/repo
 Demo: https://demo.example.com
 Imagen: /projects/nombre.png
+EN: Resumen en inglés para la web en inglés.
 ```
 
 `Imagen` es opcional (archivo en `public/projects/`). Solo se aceptan enlaces `http(s)`.
-El mismo texto alimenta la tarjeta de la web y las respuestas del asistente.
+El mismo texto alimenta la web (que muestra la primera frase como resumen) y las respuestas del asistente.
 
 Formatos del resto de archivos (documentados también en comentarios dentro de cada `.md`):
 
-- `skills.md`: `## Categoría` y una línea `- Tecnología — contexto` por tecnología.
-- `education.md`: `## Titulación` + `Centro:`, `Periodo:`, `Estado:` + descripción.
-- `certifications.md`: `## Certificación` + `Emisor:`, `Fecha:`, `Credencial:` (URL) + descripción.
-- `about.md`: `## Perfil`, `## Experiencia`… y `## Contacto` con `Email:`, `LinkedIn:`, `GitHub:`.
+- `skills.md`: `## Categoría` (+ `EN:` con el nombre en inglés) y una línea `- Tecnología — contexto` por tecnología.
+- `education.md`: `## Titulación` + `Centro:`, `Periodo:`, `Estado:` + descripción (aparece en la trayectoria).
+- `certifications.md`: `## Nombre (CÓDIGO)` + `Emisor:`, `Fecha:`, `Credencial:` (URL) + descripción.
+  El código entre paréntesis (p. ej. `AI-102`) se muestra en grande en la tarjeta.
+- `about.md`:
+  - `## Perfil` con `Titular:` (subtítulo de la portada) y la presentación (el último párrafo es la entradilla).
+  - `## Experiencia` con un `### Puesto` por trabajo: `Empresa:`, `Periodo:` (un periodo abierto como `2026 —`
+    marca el puesto actual, que aparece en la portada) + descripción.
+  - `## Ubicación`, `## Idiomas` (con `Resumen:` para la portada) y `## Contacto` con `Email:`, `LinkedIn:`, `GitHub:`.
+
+El **CV** se sirve desde `public/cv.pdf`; si lo borras, la web oculta el botón y la fila de descarga.
 
 ## Modificar el comportamiento del asistente
 
@@ -262,7 +290,7 @@ Formatos del resto de archivos (documentados también en comentarios dentro de c
 - **Creatividad / longitud**: `temperature` y límite de tokens en `lib/gemini.ts` y `lib/groq.ts`.
 - **Cadena de modelos y tiempos**: `DEFAULTS`, `ATTEMPT_TIMEOUT_MS` y `TOTAL_BUDGET_MS` en `lib/llm.ts`.
 - **Límites de entrada**: `MAX_MESSAGE_LENGTH` y `MAX_HISTORY_MESSAGES` en `lib/types.ts`; rate limit en `lib/rate-limit.ts`.
-- **Preguntas sugeridas**: `SUGGESTED_QUESTIONS` en `lib/sections.ts`.
+- **Preguntas sugeridas y textos de la interfaz (ES/EN)**: `SUGGESTIONS` y `UI` en `lib/i18n.ts`.
 
 Tras cambiar el prompt, prueba a mano los casos límite: una pregunta fuera de tema ("¿Qué es Docker?"),
 una sin datos ("¿Dónde vive?"), una en inglés y un intento de injection ("ignora tus instrucciones y…").

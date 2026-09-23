@@ -3,9 +3,10 @@
 ## Dirección de arte
 Estilo: editorial técnico. Un documento impreso con alma de consola: papel cálido, tinta, notas al pie.
 Se debe sentir: preciso, sereno, fiable.        NO puede parecer: plantilla SaaS, "IA mágica" violeta, dashboard.
-Gesto memorable: la conversación se lee como una entrevista anotada. Mientras el asistente piensa se ve
-qué archivos está leyendo, y cada respuesta lleva sus fuentes como notas al pie que saltan a la sección
-correspondiente del portfolio.
+Gesto memorable (v2, propuesta de Claude Design): la portada "arranca" indexando los 5 archivos y una barra de
+pregunta escribe sola las preguntas sugeridas. El asistente vive en un panel lateral; la respuesta llega en
+streaming con cursor, el carril de archivos se ilumina al leer y las fuentes citadas llevan número y saltan a
+su sección del portfolio.
 
 ## Tokens (app/globals.css)
 Primitivos OKLCH → semánticos. Los componentes solo usan semánticos:
@@ -18,9 +19,11 @@ Tipografía: titular Instrument Serif (itálica para énfasis), UI/cuerpo Geist,
 Movimiento: --dur-fast 140ms, --dur-med 260ms, --dur-reveal 560ms, --ease-out cubic-bezier(.16,1,.3,1). Solo transform/opacity.
 
 ## Retícula
-12 columnas, gutter 24px, margen clamp(20px,5vw,96px), máx 1280px.
-Cabecera: columna lateral de 4 (nombre, índice) + chat de 8. Secciones: etiqueta 3 + contenido 9.
-Ruptura intencional: el contacto final ocupa las 12 columnas con el email en tipografía display.
+Contenedor máx. 1280px, margen clamp(20px,5vw,96px). Secciones en flex: cabecera lateral (número, título,
+fuente, "preguntar al asistente") de 240-320px + contenido; en móvil se apilan.
+Ruptura intencional: nombre en portada a clamp(4.25rem,…,11.5rem) y contacto a todo el ancho con el email en display.
+Panel del asistente: lateral de min(600px,100%) desde 1040px (`wide:`), pantalla completa por debajo.
+Barra fija inferior "Pregúntale a mi asistente" cuando la barra de la portada sale de pantalla.
 
 ## Reglas duras
 - Sin gradientes, sin sombras, sin tarjetas con borde. Listas y filetes horizontales.

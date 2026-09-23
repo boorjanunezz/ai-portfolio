@@ -1,53 +1,42 @@
 /**
- * Benchmark de modelos con el prompt REAL del asistente (retrieval incluido).
- * Uso: npx tsx --conditions=react-server --env-file=.env.local scripts/bench-models.mts
- * Llamadas secuenciales; no imprime la API key.
+ * Benchmark de modelos con el prompt REAL del asistente (retrieval incluido), en streaming.
+ * Mide el tiempo hasta el primer token y el total. Llamadas secuenciales; no imprime las keys.
+ *
+ *   npx tsx --conditions=react-server --env-file=.env.local scripts/bench-models.mts
+ *   BENCH_MODELS="gemini:gemma-4-26b-a4b-it,groq:openai/gpt-oss-120b" npx tsx ...
  */
 const { retrieve } = await import("../lib/retrieval");
 const { buildUserPrompt, SYSTEM_PROMPT } = await import("../lib/prompts");
+const { streamGemini } = await import("../lib/gemini");
+const { streamGroq } = await import("../lib/groq");
 
-const key = process.env.GEMINI_API_KEY!;
-const MODELS = (process.env.BENCH_MODELS ?? "gemini-3.5-flash-lite,gemini-3.5-flash,gemini-3.1-flash-lite").split(",");
-const ALL_THINKING: Record<string, object | undefined> = { default: undefined, low: { thinkingLevel: "low" }, minimal: { thinkingLevel: "minimal" } };
-const THINKING = Object.fromEntries(Object.entries(ALL_THINKING).filter(([k]) => (process.env.BENCH_THINKING ?? "default,low,minimal").split(",").includes(k)));
-const QUESTIONS = ["¿Qué proyectos de IA ha desarrollado?", "¿Qué es Docker?", "What technologies does he use?"];
-const TIMEOUT = 25_000;
+const MODELS = (process.env.BENCH_MODELS ?? "gemini:gemma-4-26b-a4b-it,gemini:gemini-3.5-flash,groq:openai/gpt-oss-120b").split(",");
+const QUESTIONS = ["¿Qué certificaciones tiene?", "¿Qué es Docker?", "What languages does he speak?"];
+const TIMEOUT = 30_000;
 
-const schema = {
-  type: "OBJECT",
-  properties: { status: { type: "STRING", enum: ["answered", "no_info", "off_topic"] }, answer: { type: "STRING" }, sources: { type: "ARRAY", items: { type: "STRING" } } },
-  required: ["status", "answer", "sources"],
-};
-
-for (const model of MODELS) {
-  for (const [label, thinkingConfig] of Object.entries(THINKING)) {
-    const results: string[] = [];
-    for (const q of QUESTIONS) {
-      const t0 = Date.now();
-      try {
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-          body: JSON.stringify({
-            systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-            contents: [{ role: "user", parts: [{ text: buildUserPrompt(q, retrieve(q), "") }] }],
-            generationConfig: { temperature: 0.2, maxOutputTokens: 8192, responseMimeType: "application/json", responseSchema: schema, ...(thinkingConfig ? { thinkingConfig } : {}) },
-          }),
-          signal: AbortSignal.timeout(TIMEOUT),
-        });
-        const ms = Date.now() - t0;
-        if (!res.ok) {
-          results.push(`HTTP${res.status}(${ms})`);
-          continue;
-        }
-        const body = await res.json();
-        const text = body.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text ?? "").join("") ?? "";
-        const status = (() => { try { return JSON.parse(text).status; } catch { return "badjson"; } })();
-        results.push(`${ms}ms:${status}`);
-      } catch {
-        results.push(`TIMEOUT`);
-      }
-    }
-    console.log(`${model.padEnd(24)} ${label.padEnd(8)} ${results.join("  ")}`);
+for (const spec of MODELS) {
+  const [provider, model] = spec.split(/:(.+)/) as ["gemini" | "groq", string];
+  const key = provider === "groq" ? process.env.GROQ_API_KEY : process.env.GEMINI_API_KEY;
+  if (!key) {
+    console.log(`${spec.padEnd(34)} (sin API key)`);
+    continue;
   }
+  const results: string[] = [];
+  for (const q of QUESTIONS) {
+    const t0 = Date.now();
+    let first = 0;
+    let text = "";
+    try {
+      const stream = (provider === "groq" ? streamGroq : streamGemini)(model, key, SYSTEM_PROMPT, buildUserPrompt(q, retrieve(q), ""), AbortSignal.timeout(TIMEOUT));
+      for await (const chunk of stream) {
+        first ||= Date.now() - t0;
+        text += chunk;
+      }
+      const marker = /\[\[\s*fuentes/i.test(text) ? "" : " (sin marca)";
+      results.push(`${first}/${Date.now() - t0}ms${marker}`);
+    } catch (err) {
+      results.push(err instanceof Error ? err.message.slice(0, 30) : "error");
+    }
+  }
+  console.log(`${spec.padEnd(34)} ${results.join("  ")}`);
 }

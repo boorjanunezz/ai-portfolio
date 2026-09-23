@@ -4,10 +4,12 @@
   Una categoría por cada sección "##" y una tecnología por línea con "- ".
   Si quieres, añade contexto tras un guion largo:
   - Python — pipelines de datos y APIs con FastAPI
+  "EN: ..." traduce el nombre de la categoría para la web en inglés.
 -->
 
 ## Lenguajes
 
+EN: Languages
 - Python — IA, agentes, deep learning y análisis de datos
 - TypeScript — aplicaciones web con Next.js
 - JavaScript — React, Node.js y D3
@@ -16,6 +18,7 @@
 
 ## IA y LLMs
 
+EN: AI & LLMs
 - Azure OpenAI y Azure AI Foundry — despliegue y consumo de modelos (GPT-4o-mini, Whisper, TTS)
 - LangChain y LangGraph — agentes de IA
 - RAG — embeddings, búsqueda vectorial, recuperación con BM25 y citación de fuentes
@@ -29,6 +32,7 @@
 
 ## Datos
 
+EN: Data
 - Arquitectura Medallón — capas bronze, silver y gold
 - ETL — pipelines de ingesta de documentos a SQL Server
 - pandas — análisis y limpieza de datos
@@ -40,12 +44,14 @@
 
 ## Desarrollo web
 
+EN: Web development
 - React y Vite — SPAs
 - Next.js y Tailwind CSS
 - Node.js, Express y Socket.io — backends en tiempo real
 
 ## Cloud y DevOps
 
+EN: Cloud & DevOps
 - Microsoft Azure
 - Vercel, Render y GitHub Pages
 - Streamlit Community Cloud

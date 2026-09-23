@@ -1,16 +1,19 @@
 import "server-only";
-import { callGemini } from "./gemini";
-import { callGroq } from "./groq";
-import { LlmError, type ModelAnswer } from "./model-output";
+import { streamGemini } from "./gemini";
+import { streamGroq } from "./groq";
+import { LlmError } from "./llm-shared";
 
 /**
- * Elige proveedor y modelo con respaldo automático.
+ * Elige proveedor y modelo con respaldo automático, en streaming.
  *
  * Las capas gratuitas se saturan (503), agotan cuota (429) o tardan de 1 a 60 s.
- * Si un modelo falla o tarda demasiado se prueba el siguiente de la cadena,
- * siempre dentro del límite de tiempo de la función de Vercel:
+ * Si un modelo falla o no empieza a responder a tiempo se prueba el siguiente,
+ * siempre dentro del límite de la función de Vercel:
  *
  *   GEMINI_MODEL → GROQ_MODEL (si hay GROQ_API_KEY) → GEMINI_FALLBACK_MODELS
+ *
+ * Si un modelo falla después de empezar a escribir, se emite "reset" y el
+ * siguiente empieza de cero.
  */
 
 const DEFAULTS = {
@@ -18,11 +21,13 @@ const DEFAULTS = {
   geminiFallbacks: ["gemini-3.5-flash", "gemini-3.5-flash-lite"],
   groqModel: "openai/gpt-oss-120b",
 };
-const ATTEMPT_TIMEOUT_MS = 25_000; // por modelo
-const TOTAL_BUDGET_MS = 52_000; // < maxDuration (60 s) de app/api/chat/route.ts
+const FIRST_TOKEN_TIMEOUT_MS = 20_000; // por modelo: tiempo máximo hasta el primer trozo de texto
+const TOTAL_BUDGET_MS = 55_000; // < maxDuration (60 s) de app/api/chat/route.ts
 const MIN_ATTEMPT_MS = 4_000; // no merece la pena empezar un intento con menos margen
 const RETRY_DELAY_MS = 1_000;
 const MODEL_NAME = /^[\w.\-/]+$/;
+
+export type LlmEvent = { type: "delta"; text: string } | { type: "reset" };
 
 type Provider = "gemini" | "groq";
 interface Candidate {
@@ -31,7 +36,7 @@ interface Candidate {
   apiKey: string;
 }
 
-const CALLERS = { gemini: callGemini, groq: callGroq };
+const STREAMERS = { gemini: streamGemini, groq: streamGroq };
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function env(name: string): string | undefined {
@@ -59,7 +64,7 @@ function buildChain(): Candidate[] {
   return unique;
 }
 
-export async function generateAnswer(systemPrompt: string, userPrompt: string): Promise<ModelAnswer> {
+export async function* streamAnswer(systemPrompt: string, userPrompt: string): AsyncGenerator<LlmEvent> {
   const deadline = Date.now() + TOTAL_BUDGET_MS;
   let lastError: LlmError | null = null;
   // Un 503 ("high demand") suele ser momentáneo: cada modelo saturado se reintenta una vez al final.
@@ -70,14 +75,34 @@ export async function generateAnswer(systemPrompt: string, userPrompt: string): 
     if (retry) await sleep(RETRY_DELAY_MS);
     const remaining = deadline - Date.now();
     if (remaining < MIN_ATTEMPT_MS) break;
+
     const { provider, model, apiKey } = candidate;
+    const controller = new AbortController();
+    const firstTokenTimer = setTimeout(() => controller.abort(), Math.min(FIRST_TOKEN_TIMEOUT_MS, remaining));
+    const deadlineTimer = setTimeout(() => controller.abort(), remaining);
+    let started = false;
     try {
-      return await CALLERS[provider](model, apiKey, systemPrompt, userPrompt, Math.min(ATTEMPT_TIMEOUT_MS, remaining));
+      for await (const text of STREAMERS[provider](model, apiKey, systemPrompt, userPrompt, controller.signal)) {
+        if (!started) {
+          clearTimeout(firstTokenTimer);
+          started = true;
+        }
+        yield { type: "delta", text };
+      }
+      if (!started) throw new LlmError("El modelo devolvió una respuesta vacía.", 502, true);
+      return;
     } catch (err) {
-      if (!(err instanceof LlmError) || !err.retryable) throw err;
-      console.warn(`[llm] ${provider}/${model} falló (${err.message}); probando el siguiente modelo`);
-      lastError = err;
-      if (err.httpStatus === 503 && !retry) queue.push({ candidate, retry: true });
+      const error = err instanceof LlmError ? err : controller.signal.aborted ? new LlmError("El modelo tardó demasiado en responder.", 504, true) : null;
+      if (!error) throw err;
+      if (!error.retryable) throw error;
+      console.warn(`[llm] ${provider}/${model} falló (${error.message}); probando el siguiente modelo`);
+      lastError = error;
+      if (started) yield { type: "reset" };
+      if (error.httpStatus === 503 && !retry) queue.push({ candidate, retry: true });
+    } finally {
+      clearTimeout(firstTokenTimer);
+      clearTimeout(deadlineTimer);
+      controller.abort(); // si el consumidor corta (cliente desconectado), se cierra la conexión con el modelo
     }
   }
   throw lastError ?? new LlmError("El modelo tardó demasiado en responder.", 504);
