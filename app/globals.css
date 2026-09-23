@@ -1,0 +1,148 @@
+@import "tailwindcss";
+
+/* ── Primitivos (OKLCH) ─────────────────────────────────────────── */
+:root {
+  --paper-100: oklch(0.972 0.009 85);
+  --paper-50: oklch(0.992 0.004 85);
+  --paper-200: oklch(0.93 0.012 85);
+  --paper-300: oklch(0.87 0.013 85);
+  --ink-900: oklch(0.21 0.014 260);
+  --ink-600: oklch(0.44 0.014 260);
+  --ink-500: oklch(0.54 0.012 260);
+  --signal-500: oklch(0.63 0.19 38);
+  --signal-700: oklch(0.5 0.16 38);
+  --danger-700: oklch(0.48 0.17 25);
+
+  --dur-fast: 140ms;
+  --dur-med: 260ms;
+  --dur-reveal: 560ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+}
+
+/* ── Semánticos (los componentes solo usan estos) ───────────────── */
+@theme inline {
+  --color-bg: var(--paper-100);
+  --color-surface: var(--paper-50);
+  --color-sunken: var(--paper-200);
+  --color-rule: var(--paper-300);
+  --color-ink: var(--ink-900);
+  --color-ink-soft: var(--ink-600);
+  --color-ink-faint: var(--ink-500);
+  --color-accent: var(--signal-500);
+  --color-accent-ink: var(--signal-700);
+  --color-danger: var(--danger-700);
+
+  --font-display: var(--font-instrument-serif), "Times New Roman", serif;
+  --font-sans: var(--font-geist), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "Cascadia Mono", monospace;
+
+  --text-display: clamp(3.25rem, 2rem + 5.5vw, 6.5rem);
+  --text-display--line-height: 0.95;
+  --text-title: clamp(2rem, 1.4rem + 2.4vw, 3.25rem);
+  --text-title--line-height: 1.05;
+  --text-lead: clamp(1.125rem, 1.05rem + 0.35vw, 1.3125rem);
+  --text-lead--line-height: 1.55;
+
+  --radius-sm: 4px;
+}
+
+@layer base {
+  html {
+    background: var(--color-bg);
+    color: var(--color-ink);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    html {
+      scroll-behavior: smooth;
+    }
+  }
+  body {
+    font-family: var(--font-sans);
+    font-size: 1rem;
+    line-height: 1.6;
+  }
+  @media (min-width: 1024px) {
+    body {
+      font-size: 1.0625rem;
+    }
+  }
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+    letter-spacing: -0.02em;
+  }
+  p {
+    text-wrap: pretty;
+  }
+  ::selection {
+    background: color-mix(in oklch, var(--color-accent) 25%, transparent);
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-accent-ink);
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+  [id] {
+    scroll-margin-top: 32px;
+  }
+}
+
+/* ── Retícula ───────────────────────────────────────────────────── */
+@utility page {
+  width: 100%;
+  max-width: calc(1280px + 2 * clamp(20px, 5vw, 96px));
+  margin-inline: auto;
+  padding-inline: clamp(20px, 5vw, 96px);
+}
+@utility grid-12 {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  column-gap: 24px;
+}
+
+/* ── Movimiento ─────────────────────────────────────────────────── */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes scan {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@utility animate-rise {
+  animation: rise var(--dur-reveal) var(--ease-out) both;
+}
+@utility animate-message {
+  animation: rise var(--dur-med) var(--ease-out) both;
+}
+@utility animate-scan {
+  animation: scan 1.4s var(--ease-out) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise,
+  .animate-message {
+    animation-name: fade;
+  }
+  .animate-scan {
+    animation: none;
+    opacity: 0.7;
+  }
+}
