@@ -140,7 +140,7 @@ Sin `GEMINI_API_KEY` la web funciona y el chat muestra un error claro ("El asist
 | Variable | Obligatoria | Descripción |
 |---|---|---|
 | `GEMINI_API_KEY` | Sí | Clave de Google AI Studio. **Solo servidor**: nunca la prefijes con `NEXT_PUBLIC_`. |
-| `GEMINI_MODEL` | No | Modelo de Gemini. Por defecto `gemini-2.5-flash`. |
+| `GEMINI_MODEL` | No | Modelo de Gemini. Por defecto `gemini-3.5-flash-lite`. |
 
 ### Configurar `GEMINI_API_KEY`
 
@@ -150,8 +150,11 @@ Sin `GEMINI_API_KEY` la web funciona y el chat muestra un error claro ("El asist
 
 ### Configurar `GEMINI_MODEL`
 
-Cualquier modelo de Gemini que soporte `generateContent` con salida JSON, p. ej. `gemini-2.5-flash`,
-`gemini-2.5-flash-lite` (más rápido/barato) o `gemini-2.5-pro`. Consulta los modelos disponibles en
+Cualquier modelo de Gemini que soporte `generateContent` con salida JSON (*structured output*).
+Recomendado: **`gemini-3.5-flash-lite`** (estable, gratis y el de menor latencia; la tarea es responder
+con 1-4 fragmentos cortos y no necesita un modelo grande). Si en tus pruebas no rechaza bien las preguntas
+fuera de tema, cambia a **`gemini-3.8-flash`** (también gratis, más capaz, algo más lento).
+La serie 2.5 está restringida a cuentas que ya la usaban: no la uses en un proyecto nuevo. Consulta los modelos disponibles en
 <https://ai.google.dev/gemini-api/docs/models>. En Vercel, cambia la variable y haz *Redeploy*: no hay que
 tocar código. Si el nombre no existe, el chat muestra "El modelo configurado en GEMINI_MODEL no existe".
 

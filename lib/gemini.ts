@@ -6,7 +6,7 @@ import type { AnswerStatus } from "./types";
  * Modelo y clave llegan por variables de entorno: GEMINI_MODEL y GEMINI_API_KEY.
  */
 
-const DEFAULT_MODEL = "gemini-2.5-flash";
+const DEFAULT_MODEL = "gemini-3.5-flash-lite";
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 const TIMEOUT_MS = 25_000;
 
@@ -59,7 +59,7 @@ export async function generateAnswer(systemPrompt: string, userPrompt: string): 
         contents: [{ role: "user", parts: [{ text: userPrompt }] }],
         generationConfig: {
           temperature: 0.2,
-          maxOutputTokens: 2048,
+          maxOutputTokens: 8192, // margen para los tokens de "thinking" de los modelos 3.x
           responseMimeType: "application/json",
           responseSchema: RESPONSE_SCHEMA,
         },
