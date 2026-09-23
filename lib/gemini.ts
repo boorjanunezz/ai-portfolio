@@ -4,11 +4,19 @@ import type { AnswerStatus } from "./types";
 /**
  * Cliente mínimo de la API REST de Gemini (sin SDK).
  * Modelo y clave llegan por variables de entorno: GEMINI_MODEL y GEMINI_API_KEY.
+ *
+ * La capa gratuita a veces encola las peticiones (latencias de 1 s a 60 s) o
+ * devuelve 503 por alta demanda. Por eso, si el modelo principal falla o tarda
+ * demasiado, se prueba el siguiente de la lista (GEMINI_FALLBACK_MODELS),
+ * siempre dentro del límite de tiempo de la función de Vercel.
  */
 
-const DEFAULT_MODEL = "gemini-3.5-flash-lite";
+const DEFAULT_MODEL = "gemma-4-26b-a4b-it";
+const DEFAULT_FALLBACKS = ["gemini-3.5-flash", "gemini-3.5-flash-lite"];
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta";
-const TIMEOUT_MS = 25_000;
+const ATTEMPT_TIMEOUT_MS = 25_000; // por modelo
+const TOTAL_BUDGET_MS = 52_000; // < maxDuration (60 s) de app/api/chat/route.ts
+const MIN_ATTEMPT_MS = 4_000; // no merece la pena empezar un intento con menos margen
 
 export interface ModelAnswer {
   status: AnswerStatus;
@@ -21,6 +29,8 @@ export class GeminiError extends Error {
   constructor(
     message: string,
     public readonly httpStatus: number,
+    /** true si otro modelo podría funcionar (saturación, cuota, timeout). */
+    public readonly retryable = false,
   ) {
     super(message);
     this.name = "GeminiError";
@@ -38,17 +48,48 @@ const RESPONSE_SCHEMA = {
   propertyOrdering: ["status", "answer", "sources"],
 };
 
+const MODEL_NAME = /^[\w.-]+$/;
+
 function getConfig() {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) throw new GeminiError("El asistente no está configurado (falta GEMINI_API_KEY).", 503);
-  const model = process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL;
-  if (!/^[\w.\-]+$/.test(model)) throw new GeminiError("GEMINI_MODEL no es un nombre de modelo válido.", 500);
-  return { apiKey, model };
+  const primary = process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL;
+  const fallbacks = process.env.GEMINI_FALLBACK_MODELS?.trim()
+    ? process.env.GEMINI_FALLBACK_MODELS.split(",").map((m) => m.trim())
+    : DEFAULT_FALLBACKS;
+  const models = [...new Set([primary, ...fallbacks])].filter(Boolean);
+  if (!models.every((m) => MODEL_NAME.test(m))) {
+    throw new GeminiError("GEMINI_MODEL o GEMINI_FALLBACK_MODELS contienen un nombre no válido.", 500);
+  }
+  return { apiKey, models };
 }
 
 export async function generateAnswer(systemPrompt: string, userPrompt: string): Promise<ModelAnswer> {
-  const { apiKey, model } = getConfig();
+  const { apiKey, models } = getConfig();
+  const deadline = Date.now() + TOTAL_BUDGET_MS;
+  let lastError: GeminiError | null = null;
 
+  for (const model of models) {
+    const remaining = deadline - Date.now();
+    if (remaining < MIN_ATTEMPT_MS) break;
+    try {
+      return await callModel(model, apiKey, systemPrompt, userPrompt, Math.min(ATTEMPT_TIMEOUT_MS, remaining));
+    } catch (err) {
+      if (!(err instanceof GeminiError) || !err.retryable) throw err;
+      console.warn(`[gemini] ${model} falló (${err.message}); probando el siguiente modelo`);
+      lastError = err;
+    }
+  }
+  throw lastError ?? new GeminiError("El modelo tardó demasiado en responder.", 504);
+}
+
+async function callModel(
+  model: string,
+  apiKey: string,
+  systemPrompt: string,
+  userPrompt: string,
+  timeoutMs: number,
+): Promise<ModelAnswer> {
   let res: Response;
   try {
     res = await fetch(`${API_BASE}/models/${model}:generateContent`, {
@@ -64,19 +105,20 @@ export async function generateAnswer(systemPrompt: string, userPrompt: string): 
           responseSchema: RESPONSE_SCHEMA,
         },
       }),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
       cache: "no-store",
     });
   } catch (err) {
     const timedOut = err instanceof Error && err.name === "TimeoutError";
-    throw new GeminiError(timedOut ? "El modelo tardó demasiado en responder." : "No se pudo contactar con el modelo.", 504);
+    throw new GeminiError(timedOut ? "El modelo tardó demasiado en responder." : "No se pudo contactar con el modelo.", 504, true);
   }
 
   if (!res.ok) {
     // El cuerpo de error de Google puede ser útil en logs, pero no se envía al cliente.
-    console.error(`[gemini] HTTP ${res.status}:`, (await res.text()).slice(0, 500));
-    if (res.status === 429) throw new GeminiError("Se ha alcanzado el límite de uso del modelo. Inténtalo en un momento.", 429);
-    if (res.status === 404) throw new GeminiError("El modelo configurado en GEMINI_MODEL no existe.", 502);
+    console.error(`[gemini] ${model} HTTP ${res.status}:`, (await res.text()).slice(0, 300));
+    if (res.status === 429) throw new GeminiError("Se ha alcanzado el límite de uso del modelo. Inténtalo en un momento.", 429, true);
+    if (res.status >= 500) throw new GeminiError("El modelo está saturado. Inténtalo en un momento.", 503, true);
+    if (res.status === 404) throw new GeminiError(`El modelo ${model} no existe.`, 502, true);
     throw new GeminiError("El modelo devolvió un error.", 502);
   }
 

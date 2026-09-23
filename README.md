@@ -140,7 +140,8 @@ Sin `GEMINI_API_KEY` la web funciona y el chat muestra un error claro ("El asist
 | Variable | Obligatoria | Descripción |
 |---|---|---|
 | `GEMINI_API_KEY` | Sí | Clave de Google AI Studio. **Solo servidor**: nunca la prefijes con `NEXT_PUBLIC_`. |
-| `GEMINI_MODEL` | No | Modelo de Gemini. Por defecto `gemini-3.5-flash-lite`. |
+| `GEMINI_MODEL` | No | Modelo principal. Por defecto `gemma-4-26b-a4b-it`. |
+| `GEMINI_FALLBACK_MODELS` | No | Respaldo, separados por comas. Por defecto `gemini-3.5-flash,gemini-3.5-flash-lite`. |
 
 ### Configurar `GEMINI_API_KEY`
 
@@ -151,12 +152,26 @@ Sin `GEMINI_API_KEY` la web funciona y el chat muestra un error claro ("El asist
 ### Configurar `GEMINI_MODEL`
 
 Cualquier modelo de Gemini que soporte `generateContent` con salida JSON (*structured output*).
-Recomendado: **`gemini-3.5-flash-lite`** (estable, gratis y el de menor latencia; la tarea es responder
-con 1-4 fragmentos cortos y no necesita un modelo grande). Si en tus pruebas no rechaza bien las preguntas
-fuera de tema, cambia a **`gemini-3.8-flash`** (también gratis, más capaz, algo más lento).
-La serie 2.5 está restringida a cuentas que ya la usaban: no la uses en un proyecto nuevo. Consulta los modelos disponibles en
+Por defecto se usa **`gemma-4-26b-a4b-it`** (Gemma 4, servido por la misma Gemini API y con la misma key),
+elegido por medición con el prompt real (sept. 2026, capa gratuita):
+
+| Modelo | Resultado (3 preguntas, timeout 25 s) |
+|---|---|
+| `gemma-4-26b-a4b-it` | 3/3 correctas, 1,3-3,4 s; en una batería de 10 casos (rechazos, injection, inglés, seguimiento) 10/10 en 1,4-3,4 s |
+| `gemini-3.5-flash` | 3/3 correctas, 5-11 s, pero **solo 20 peticiones/día** en la capa gratuita |
+| `gemini-3.5-flash-lite` | mayoría de timeouts; las que responden, 17-20 s |
+| `gemini-3.1-flash-lite`, `gemini-3.7-flash`, `gemma-4-31b-it` | 503 "high demand" casi siempre |
+| `gemini-2.5-*` | 404: restringidos a cuentas antiguas |
+
+Cada modelo tiene **su propia cuota diaria** (consúltalas en <https://aistudio.google.com/rate-limit>), así que
+encadenar modelos suma capacidad. La capa gratuita además tiene latencias muy variables y picos de saturación (503). Por eso la API usa **modelos de
+respaldo**: si el principal devuelve 429/5xx o tarda más de 25 s, prueba el siguiente de
+`GEMINI_FALLBACK_MODELS`, siempre dentro de 52 s (la función tiene `maxDuration = 60`).
+Para repetir la medición: `npx tsx --conditions=react-server --env-file=.env.local scripts/bench-models.mts`.
+
+La serie 2.5 está restringida a cuentas que ya la usaban: no la uses en un proyecto nuevo. Modelos disponibles:
 <https://ai.google.dev/gemini-api/docs/models>. En Vercel, cambia la variable y haz *Redeploy*: no hay que
-tocar código. Si el nombre no existe, el chat muestra "El modelo configurado en GEMINI_MODEL no existe".
+tocar código.
 
 ---
 
@@ -239,6 +254,8 @@ una sin datos ("¿Dónde vive?"), una en inglés y un intento de injection ("ign
 - **Rate limit en memoria**: cada instancia serverless tiene el suyo; no es un límite global.
   La cuota de Gemini es la protección real frente a abusos.
 - **Sin streaming**: la respuesta llega completa (suficiente para respuestas cortas).
+- **Latencia de la capa gratuita**: normalmente 5-10 s, pero con picos. En momentos de saturación de Google
+  todos los modelos pueden fallar y el chat mostrará "El modelo está saturado".
 - **Detección de idioma** delegada al modelo; los rechazos fijos del servidor (canary) usan una heurística simple.
 - Ninguna defensa contra prompt injection es perfecta: el diseño minimiza el daño (el modelo solo ve
   información pública del portfolio y no tiene herramientas).

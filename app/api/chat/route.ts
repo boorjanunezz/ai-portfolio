@@ -7,7 +7,7 @@ import type { ChatError, ChatResponse } from "@/lib/types";
 
 export const runtime = "nodejs"; // necesario para leer /content con fs
 export const dynamic = "force-dynamic";
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 const MAX_BODY_BYTES = 20_000;
 

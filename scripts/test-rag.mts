@@ -172,5 +172,25 @@ await test("error 429 de Gemini → error 429", async () => {
   console.error = originalError;
 });
 
-console.log(failed ? `\n${failed} test(s) fallidos\n` : "\nTodo OK\n");
+await test("fallback: si el modelo principal da 503, usa el siguiente", async () => {
+  const called: string[] = [];
+  globalThis.fetch = (async (url: string) => {
+    called.push(/models\/([^:]+)/.exec(url)![1]!);
+    if (called.length === 1) return new Response("high demand", { status: 503 });
+    const text = JSON.stringify({ status: "no_info", answer: "No tengo información sobre eso en mi base de conocimiento.", sources: [] });
+    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] }));
+  }) as unknown as typeof fetch;
+  process.env.GEMINI_FALLBACK_MODELS = "modelo-b,modelo-c";
+  const originalError = console.error;
+  const originalWarn = console.warn;
+  console.error = console.warn = () => {};
+  const r = await answerQuestion("¿Dónde vive Borja?", []);
+  console.error = originalError;
+  console.warn = originalWarn;
+  delete process.env.GEMINI_FALLBACK_MODELS;
+  assert.deepEqual(called, ["gemini-test", "modelo-b"]);
+  assert.equal(r.status, "no_info");
+});
+
+console.log(failed ?`\n${failed} test(s) fallidos\n` : "\nTodo OK\n");
 process.exit(failed ? 1 : 0);
